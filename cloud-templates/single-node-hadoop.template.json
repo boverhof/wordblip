@@ -1,0 +1,255 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Create a hadoop VM",
+    "Parameters": {
+        "KeyName": {
+            "Description": "Name of the EC2 KeyPair we will create internally to access instances in our VPC",
+            "Type": "String",
+            "MinLength": "1",
+            "MaxLength": "64",
+            "AllowedPattern": "[-_ a-zA-Z0-9]*",
+            "ConstraintDescription": "can contain only alphanumeric characters, spaces, dashes and underscores."
+        },
+        "VpcId": {
+            "Type": "String",
+            "Description": "VpcId of your existing Virtual Private Cloud (VPC)"
+        },
+        "SubnetId": {
+            "Type": "String",
+            "Description": "SubnetId of an existing Public facing subnet in your Virtual Private Cloud (VPC)"
+        },
+        "AllocationId": {
+            "Type": "String",
+            "Description": "AllocationId of an existing Elastic IP address",
+            "MinLength": "10",
+            "MaxLength": "20",
+            "AllowedPattern": "eipalloc-[a-zA-Z0-9]*",
+            "ConstraintDescription": "can contain only alphanumeric characters, spaces, dashes and underscores."
+        },
+        "TagGateway": {
+            "Type": "String",
+            "MinLength": "1",
+            "MaxLength": "20",
+            "Description": "The Tag Gateway"
+        }
+    },
+    "Mappings": {
+        "AWSInstanceType2Arch": {
+            "t2.micro": {
+                "Arch": "HVM64CENTOS7"
+            }
+        },
+        "AWSRegionArch2AMI": {
+            "us-east-1": {
+                "PV64": "ami-50842d38",
+                "HVM64": "ami-08842d60",
+                "HVMG2": "ami-3a329952"
+            },
+            "us-west-2": {
+                "PV64": "ami-af86c69f",
+                "HVM64": "ami-8786c6b7",
+                "HVMG2": "ami-47296a77",
+                "HVM64CENTOS7": "ami-c7d092f7"
+            },
+            "us-west-1": {
+                "PV64": "ami-c7a8a182",
+                "HVM64": "ami-cfa8a18a",
+                "HVMG2": "ami-331b1376"
+            }
+        }
+    },
+    "Resources": {
+        "CfnUser": {
+            "Type": "AWS::IAM::User",
+            "Properties": {
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "root",
+                        "PolicyDocument": {
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "ec2:CreateKeyPair",
+                                        "ec2:DescribeKeyPairs",
+                                        "ec2:DescribeRegions",
+                                        "ec2:ImportKeyPair"
+                                    ],
+                                    "Resource": "*"
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": "cloudformation:DescribeStackResource",
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "CfnKeys": {
+            "Type": "AWS::IAM::AccessKey",
+            "Properties": {
+                "UserName": {
+                    "Ref": "CfnUser"
+                }
+            }
+        },
+        "ElasticIP": {
+            "Type": "AWS::EC2::EIPAssociation",
+            "Properties": {
+                "AllocationId": {
+                    "Ref": "AllocationId"
+                },
+                "InstanceId": {
+                    "Ref": "HadoopGatewayHost"
+                }
+            }
+        },
+        "WordblipGatewaySecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Enable HTTP access on port 8080 and on VPC private network open",
+                "VpcId": {
+                    "Ref": "VpcId"
+                },
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "22",
+                        "ToPort": "22",
+                        "CidrIp": "71.237.138.228/32"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "0",
+                        "ToPort": "65535",
+                        "CidrIp": "10.0.0.0/16"
+                    },
+                    {
+                        "IpProtocol": "udp",
+                        "FromPort": "0",
+                        "ToPort": "65535",
+                        "CidrIp": "10.0.0.0/16"
+                    },
+                    {
+                        "IpProtocol": "icmp",
+                        "FromPort": "-1",
+                        "ToPort": "-1",
+                        "CidrIp": "10.0.0.0/16"
+                    }
+                ]
+            }
+        },
+        "WordblipGatewayIamInstanceProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [
+                    "WordblipGateway"
+                ]
+            }
+        },
+        "HadoopGatewayHost": {
+            "Type": "AWS::EC2::Instance",
+            "Metadata": {
+                "Comment1": "Configure the bootstrap helpers to install the Apache Web Server and PHP",
+                "Comment2": "Save website content to /var/www/html/index.php",
+                "AWS::CloudFormation::Init": {
+                    "configSets": {
+                        "Install": [
+                            "Install"
+                        ]
+                    },
+                    "Install": {
+                        "packages": {
+                            "yum": {
+                                "httpd": []
+                            }
+                        }
+                    }
+                 }
+            },
+            "Properties": {
+                    "InstanceType": "t2.micro",
+                    "ImageId" : { "Fn::FindInMap" : [ "AWSRegionArch2AMI", { "Ref" : "AWS::Region" },
+                          { "Fn::FindInMap" : [ "AWSInstanceType2Arch", "t2.micro", "Arch" ] } ] 
+                    },
+                    "SecurityGroupIds": [
+                        {
+                            "Ref": "WordblipGatewaySecurityGroup"
+                        }
+                    ],
+                    "SubnetId": {
+                        "Ref": "SubnetId"
+                    },
+                    "IamInstanceProfile": {
+                        "Ref": "WordblipGatewayIamInstanceProfile"
+                    },
+                    "KeyName": {
+                        "Ref": "KeyName"
+                    },
+                    "Tags": [
+                        {
+                            "Key": "Gateway",
+                            "Value": {
+                                "Ref": "TagGateway"
+                            }
+                        },
+                        {
+                            "Key": "Name",
+                            "Value": "HadoopHeadNode"
+                        }
+                    ],
+                    "UserData": {
+                        "Fn::Base64": {
+                            "Fn::Join": [
+                                "",
+                                [
+                                    "#!/bin/bash\n",
+                                    "yum update -y\n",
+                                    "echo 'Install Hadoop' | tee /tmp/output.txt\n",
+                                    "curl -O http://mirror.nexcess.net/apache/hadoop/common/hadoop-2.6.0/hadoop-2.6.0.tar.gz\n",
+                                    "tar zxf hadoop-2.6.0.tar.gz\n",
+                                    "mv hadoop-2.6.0  /usr/local/hadoop\n",
+                                    "hostname head\n",
+                                    "ifconfig eth0 | awk '/inet addr:/ {printf $2}' | cut -d ':' -f 2 >> /etc/hosts\n",
+                                    "echo ' head' >> /etc/hosts\n",
+                                    "yum -y install java\n",
+                                    "export JAVA_HOME=/etc/alternatives/jre_1.7.0\n",
+                                    "export HADOOP_PREFIX=/usr/local/hadoop\n",
+                                    "export PATH=${PATH}:${HADOOP_PREFIX}/bin\n",
+                                    "\n"
+                                ]
+                            ]
+                        }
+                    }
+                }
+        }
+    },
+    "Outputs": {
+        "InstanceID": {
+            "Value": {
+                "Ref": "HadoopGatewayHost"
+            },
+            "Description": "WordblipGateway Instance ID"
+        },
+        "IPAddress": {
+            "Value": {
+                "Ref": "ElasticIP"
+            },
+            "Description": "Public IP address of instance"
+        },
+        "PrivateIp": {
+            "Value": {
+                "Fn::GetAtt": [
+                    "HadoopGatewayHost",
+                    "PrivateIp"
+                ]
+            },
+            "Description": "Private IP address of instance"
+        }
+    }
+}
